@@ -1,0 +1,201 @@
+---
+title: "Extract Climate"
+author: "Aidan Brushett"
+date: "2026-07-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(sf) # for points and buffering
+library(tidyverse)
+library(terra)
+#library(MODIStsp)
+rm(list = ls())
+```
+
+The purpose of this script is to batch extract daily surface weather and climate data from DAYMET's single pixel extraction tool. To do this I will use our file of camera locations (lat/long), and extract data for every study year for each site. I could go through and only extract the relevant years for each site, since all sites were not sampled across the entire study period, but I think its easier just to extract it all and then filter down later.
+
+The Daymet single pixel extractor tool takes the camera lat and long coordinates into the projected daymet x/y coordinates.  From the Daymet dataset of daily interpolated surface weather variables, daily data from the nearest 1 km x 1 km Daymet grid cell are extracted and formatted as a table with one column for each Daymet variable and one row for each day
+
+One note on operability from the daymetr github page: We received news from Dr. Michele Thornton at the Oak Ridge National Laboratory (ORNL) that the DAYMET API they host will be decommissioned. This change will be effective within weeks (late March 2025) and affect first and foremost the spatial (gridded/tiled) data products, before most likely covering the whole THREDDS data server setup including point based data by the end of the year. We suggest that users of our {daymetr} R package migrate to the NASA EarthData Appeears based API as covered by our {appeears} R package.
+
+DAYMET single pixel extraction tool: https://daymet.ornl.gov/single-pixel/
+daymetr package: https://github.com/bluegreen-labs/daymetr
+
+
+Load packages you will need:
+
+```{r}
+rm(list=ls())
+library(daymetr)      #interface for daymet web services
+library(tidyverse)
+library(sf)
+```
+
+# 1. Read in the raw site coordinates:
+
+I'll read in all the sites into a single file first: 
+
+```{r}
+sites_osm <- read_csv("./data/input/OSM_site_coordinates_2021-2024.csv")
+```
+
+For DAYMET to work, you must have a .csv file (not an R dataframe or tibble) with the columns `site`, `lat`, `long` IN THAT ORDER formatted to *WGS84 decimal degrees*. We'll write that here. 
+
+```{r}
+sites_osm %>%
+  
+  relocate(site, lat, long, .before = everything()) %>%
+  
+  write_csv(., "./data/input/OSM_site_coordinates_2021-2024_DAYMET.csv")
+```
+
+# 2. Batch extracting the daymet data
+
+I am going to extract data for years 2019-2024 (7 years). For this to work, you need to read in a dataframe that has columns for "site", "lat" and "long" IN THAT ORDER. You can have additional columns in this dataframe for things like SiteID and other covariates, but they must come after. One other note, this does not support dataframes in your R environment, you are required to read it in from a working directory
+
+```{r}
+batch_data <- download_daymet_batch(
+  file_location = "./data/input/OSM_site_coordinates_2021-2024_DAYMET.csv",
+  start = 2021, #example start year in 2020
+  end = 2025,   #example end year in 2024
+  internal = TRUE)
+
+sites_daymet <- map(batch_data, "data") %>%
+  set_names(map_chr(batch_data, "site")) %>%
+  map(., ~ .x %>%
+  rename(
+    day_length_seconds      = dayl..s.,
+    precip_mm               = prcp..mm.day.,
+    shortwave_radiation     = srad..W.m.2.,
+    snow_water_equiv_kgM2   = swe..kg.m.2.,
+    max_temp_C              = tmax..deg.c.,
+    min_temp_C              = tmin..deg.c.,
+    water_vapor_pressure_pa = vp..Pa.,
+    day                     = yday
+    )
+  ) %>%
+  tibble(sites_osm, data = .) %>%
+  unnest(cols = c(data))
+
+
+
+#Are there any NA values? Or something that otherwise did not get extracted?
+#This is key to check since there may be some issues with the American datasources in coming months/years
+sites_daymet %>%
+  filter(if_any(day_length_seconds:day, is.na))
+```
+
+
+Save the file:
+
+```{r}
+write_csv(sites_daymet, "./data/output/OSM_DAYMET_daily_site_covariates.csv")
+```
+
+
+
+
+
+# 3. Let's format into some useful annual winter metrics. 
+
+```{r}
+# Define the core winter months for your severity index (e.g., Nov 1 to Apr 30)
+winter_start <- 305 # NOVEMBER 1
+winter_end <- 120 # APRIL 30
+
+# Start to process the data into annual metrics
+sites_daymet_annual <- sites_daymet %>%
+  
+  # Create a column to track which winter it is, based on the START of winter. 
+  # This is a bit incorrect but it follows convention for tracking OSM sampling fiscal years, which go by start date
+  mutate(winter_year = if_else(day < winter_start, year - 1, year)) %>%
+  
+  filter(day >= winter_start | day <= winter_end) %>%
+  
+  # Confirm sorted chronologically  
+  arrange(year, day) %>%
+
+  # Group by site and the new winter year
+  group_by(across(array:array_visit), winter_year) %>% 
+  
+  summarize(
+    # -- TIMING --
+    # which() ensures we safely ignore NA values while finding the index
+    first_snow_day      = first(day[which(snow_water_equiv_kgM2 > 0)]),
+    last_snow_day       = last(day[which(snow_water_equiv_kgM2 > 0)]),
+    
+    # -- SNOW --
+    mean_swe            = mean(snow_water_equiv_kgM2, na.rm = TRUE),
+    peak_swe            = max(snow_water_equiv_kgM2, na.rm = TRUE),
+    snow_cover_days     = sum(snow_water_equiv_kgM2 > 0, na.rm = TRUE),
+    
+    # -- TEMPERATURE --
+    mean_winter_temp    = mean((max_temp_C + min_temp_C) / 2, na.rm = TRUE),
+    extreme_cold_days   = sum(min_temp_C < -20, na.rm = TRUE), # Adjust biological threshold as needed
+    cold_degree_days    = sum(abs(min_temp_C[min_temp_C < 0]), na.rm = TRUE),
+    
+    # -- SNOW CONDITION --
+    freeze_thaw_events  = sum(max_temp_C > 0 & min_temp_C < 0 & snow_water_equiv_kgM2 > 0, na.rm = TRUE),
+    
+    .groups = "drop"
+  )
+```
+
+Excellent. Now let's tidy up a bit, and also standardize the winter year values to year n, year n-1, year n-2, year n-3. 
+We'll also delete some unwanted metadata columns to keep it clean in the next script. 
+
+```{r}
+sites_daymet_annual <- sites_daymet_annual %>%
+  
+  # Drop the partially-present 2018 winter. We don't want this. 
+  filter(winter_year != 2018) %>%
+  
+  mutate(
+    # Helper column to track deployment year
+    survey_year = year(start_date),
+    # Which winter relative to the year we sampled?
+    year_n = winter_year - survey_year
+  ) %>%
+  
+  # PRevious/current 4 years of winter data for each site. 
+  filter(year_n %in% c(-3, -2, -1, 0)) %>%
+  
+  # Make an indicator to append to the columns
+  mutate(year_n = ifelse(year_n==0, 
+                         "year_n",
+                         paste0("year_n", year_n))) %>%
+  
+  select(-survey_year, -winter_year) %>%
+  
+  # Make each year its own column
+  pivot_wider(
+    names_from = year_n,
+    values_from = first_snow_day:freeze_thaw_events,
+    names_glue = "{.value}_{year_n}"
+  ) %>%
+  
+  select(-any_of(c("long", "lat", "easting_12n", "northing_12n", "start_date", 
+                   "end_date", "camera_failure_details", "deployment_id" )))
+
+```
+
+Save the file. 
+
+```{r}
+write_csv(sites_daymet_annual, "./data/output/OSM_DAYMET_annual_site_covariates.csv")
+```
+
+
+
+
+
+```{r}
+xxx <- read_csv("./data/output/OSM_DAYMET_daily_site_covariates.csv")
+```
+

@@ -6,14 +6,17 @@ library(lubridate)
 rm(list=ls())
 
 
-#----Aligning DAYMET dates----
+#----Read DAYMET and snow data----
 
-#Read in data
 daily_climate<-read.csv("data/processed/OSM_DAYMET_daily_site_covariates.csv")
 
-names(daily_climate)
+timelapse_21<-read.csv('data/raw/OSM_timelapse_2021.csv') |>select(-leftantler, -rightantler)
+timelapse_22<-read.csv('data/raw/OSM_timelapse_2022.csv')|>select(-leftantler, -rightantler)
+timelapse_23<-read.csv('data/raw/OSM_timelapse_2023.csv')|>select(-leftantler, -rightantler)
+timelapse_24<-read.csv('data/raw/OSM_timelapse_2024.csv')|>select(-leftantler, -rightantler)
 
-#----Climate sorting----
+
+#----DAYMET sorting----
 
 #Trim extra years
 daily_climate<-daily_climate|>
@@ -31,67 +34,9 @@ daily_climate<-daily_climate|>
   )
 
 
-#----Freeze thaw event ID----
-#Aidan's code (doesn't detect FTF, just FT or TF)
-daily_climate|>
-  mutate(freeze_thaw=
-           ifelse(min_temp_C<0&
-                    max_temp_C>0,
-                  1,
-                  0))
+#----Snow sorting----
 
-#FTF code, detects all FTF events
-daily_climate|>
-  mutate(
-    freeze=min_temp_C<0,
-    thaw=max_temp_C>0,
-    ftf_event=as.integer(
-      freeze==TRUE&
-      lag(thaw)==TRUE
-    )
-  )
-
-#Days since last TFT code
-daily_climate|>
-  mutate(
-    ftf_event=as.integer(ftf_event==1),
-    idx=row_number(),
-    last_event_idx=cummax(if_else(ftf_event==1,idx,0)),
-    days_since_ftf=idx-last_event_idx
-  )
-
-#Combined- NOT WORKING
-daily_climate1<-daily_climate|>
-  mutate(
-    winter_year=if_else(month(date) >= 10 ,year(date),year(date)-1),
-    winter=month(date)%in%c(10,11,12,1,2,3,4)
-  )|>
-  group_by(site,winter_year)|>
-  mutate(
-    freeze=min_temp_C<0,
-    thaw=max_temp_C>0,
-    ftf_event=as.integer(
-      winter&
-      freeze&lag(thaw,default=FALSE)
-    ),
-    idx=row_number(),
-    last_event_idx=cummax(if_else(ftf_event==1,idx,0)),
-    days_since_ftf=if_else(last_event_idx==0,NA_integer_, idx-last_event_idx)
-  )|>
-  ungroup()
-
-head(daily_climate1, 50)
-
-
-#----Snow on ground ID----
-
-#Read timelapse data
-timelapse_21<-read.csv('data/raw/OSM_timelapse_2021.csv') |>select(-leftantler, -rightantler)
-timelapse_22<-read.csv('data/raw/OSM_timelapse_2022.csv')|>select(-leftantler, -rightantler)
-timelapse_23<-read.csv('data/raw/OSM_timelapse_2023.csv')|>select(-leftantler, -rightantler)
-timelapse_24<-read.csv('data/raw/OSM_timelapse_2024.csv')|>select(-leftantler, -rightantler)
-
-#Combine
+#Combine csv
 timelapse_21_24<-bind_rows(timelapse_21,timelapse_22,timelapse_23,timelapse_24)
 
 #Extract snow, site and date info
@@ -112,15 +57,22 @@ snow<-snow|>
                         format="%Y-%m-%dT%H:%M:%SZ",
                         tz="UTC"),
     date=as.Date(datetime))
-  
-unique(format(snow$datetime,"%H:%M:%S")) 
 
 snow<-snow|>
   filter(format(datetime,"%H:%M:%S")=="12:00:00")|>
   distinct(site,date,.keep_all=TRUE)
 
+
+#----Combine snow and DAYMET----
+
+daymet_snow<-snow|>
+  left_join(daily_climate,by=c("site","date"))
+
+
+#----Trim data to first/last snow (>50 or 100)
+
 #Sort from first 100 to last 100
-snow_100_100<-snow|>
+daymet_snow_100<-daymet_snow|>
   group_by(site)|>
   mutate(
     first_100=min(datetime[snow==100|snow=="Deep"],na.rm=TRUE),
@@ -130,7 +82,7 @@ snow_100_100<-snow|>
   filter(datetime>=first_100&datetime<=last_100)
 
 #Sort from first >50 to last >50
-snow_50_50<-snow|>
+daymet_snow_gt50<-daymet_snow|>
   mutate(
     snow_chr=trimws(as.character(snow)),
     is_deep=snow_chr=="Deep",
@@ -140,18 +92,50 @@ snow_50_50<-snow|>
   )|>
   group_by(site)|>
   mutate(  
-  first_50=min(datetime[snow_season_5050],na.rm=TRUE),
+    first_50=min(datetime[snow_season_5050],na.rm=TRUE),
     last_50=max(datetime[snow_season_5050],na.rm=TRUE)
   )|>
   ungroup()|>
   filter(datetime>=first_50&datetime<=last_50)
 
 
-write.csv(snow_100_100,"data/processed/snow_21_24_100.csv")
-write.csv(snow_50_50,"data/processed/snow_21_24_gt50.csv")
+#----Freeze thaw event ID----
 
+#ID FTF and create days since FTF column
+#Snow cover: 100
+daymet_ftf_100<-daymet_snow_100|>
+  mutate(
+    winter_year=if_else(month(date) >= 10 ,year(date),year(date)-1),
+    winter=month(date)%in%c(10,11,12,1,2,3,4),
+    freeze=min_temp_C<0,
+    thaw=max_temp_C>0,
+    ftf_event=as.integer(
+      winter&
+        freeze&lag(thaw,default=FALSE)
+  ))|>
+  group_by(site,winter_year)|>
+  mutate(
+    idx=row_number(),
+    last_event_idx=cummax(if_else(ftf_event==1,idx,0)),
+    days_since_ftf=if_else(last_event_idx==0,NA_integer_, idx-last_event_idx)
+  )|>
+  ungroup()
 
-#----Add snow data to DAYMET----
-
-daymet_snow<-snow|>  #Can swap with snow and daily_climate for uncut data
-  left_join(daily_climate1,by=c("site","date"))
+#Snow cover: >50
+daymet_ftf_gt50<-daymet_snow_gt50|>
+  mutate(
+    winter_year=if_else(month(date) >= 10 ,year(date),year(date)-1),
+    winter=month(date)%in%c(10,11,12,1,2,3,4),
+    freeze=min_temp_C<0,
+    thaw=max_temp_C>0,
+    ftf_event=as.integer(
+      winter&
+        freeze&lag(thaw,default=FALSE)
+    ))|>
+  group_by(site,winter_year)|>
+  mutate(
+    idx=row_number(),
+    last_event_idx=cummax(if_else(ftf_event==1,idx,0)),
+    days_since_ftf=if_else(last_event_idx==0,NA_integer_, idx-last_event_idx)
+  )|>
+  ungroup()

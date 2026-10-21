@@ -6,9 +6,9 @@ library(lubridate)
 rm(list=ls())
 
 
-#----Read DAYMET and snow data----
+#----SNOW AND CLIMATE DATA----
 
-daily_climate<-read.csv("data/processed/OSM_DAYMET_daily_site_covariates.csv")
+daily_climate<-read.csv("data/raw/OSM_DAYMET_daily_site_covariates.csv")
 
 timelapse_21<-read.csv('data/raw/OSM_timelapse_2021.csv') |>select(-leftantler, -rightantler)
 timelapse_22<-read.csv('data/raw/OSM_timelapse_2022.csv')|>select(-leftantler, -rightantler)
@@ -139,3 +139,9 @@ daymet_ftf_gt50<-daymet_snow_gt50|>
     days_since_ftf=if_else(last_event_idx==0,NA_integer_, idx-last_event_idx)
   )|>
   ungroup()
+
+
+#----SITE COVARIATES----
+
+site_covs<-read.csv("data/raw/OSM_site_covariates_2021-2024.csv")
+

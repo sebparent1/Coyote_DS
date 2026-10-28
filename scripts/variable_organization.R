@@ -6,7 +6,7 @@ library(lubridate)
 rm(list=ls())
 
 
-#----SNOW AND CLIMATE DATA----
+#---Read data----
 
 daily_climate<-read.csv("data/raw/OSM_DAYMET_daily_site_covariates.csv")
 
@@ -15,6 +15,7 @@ timelapse_22<-read.csv('data/raw/OSM_timelapse_2022.csv')|>select(-leftantler, -
 timelapse_23<-read.csv('data/raw/OSM_timelapse_2023.csv')|>select(-leftantler, -rightantler)
 timelapse_24<-read.csv('data/raw/OSM_timelapse_2024.csv')|>select(-leftantler, -rightantler)
 
+detect<-read.csv("data/raw/OSM_independent_detections_2021-2024.csv")
 
 #----DAYMET sorting----
 
@@ -140,8 +141,42 @@ daymet_ftf_gt50<-daymet_snow_gt50|>
   )|>
   ungroup()
 
+#Write csvs
+daymet_ftf_gt50|>write.csv("data/processed/daymet_gt50.csv")
 
-#----SITE COVARIATES----
 
-site_covs<-read.csv("data/raw/OSM_site_covariates_2021-2024.csv")
+#----Coyote detection sorting----
 
+#Add date column
+detect<-detect|>
+  mutate(
+    datetime=as.POSIXct(datetime,
+                        format="%Y-%m-%dT%H:%M:%SZ",
+                        tz="UTC"),
+    date=as.Date(datetime))
+
+#Remove non-coyote observations and make it daily
+detect_coy<-detect|>
+  filter(species=="coyote")|>
+  group_by(site,date)|>
+  summarise(presence_absence=1,.groups="drop")
+
+#Combine coyote and FTF for >50 snow
+ftf_gt50_coy<-daymet_ftf_gt50|>
+  left_join(detect_coy,by=c("site","date"))
+
+ftf_gt50_coy<-ftf_gt50_coy|>
+select(site,date,month,snow,days_since_ftf,presence_absence,max_temp_C,min_temp_C,precip_mm)
+
+ftf_gt50_coy<-ftf_gt50_coy|>
+  mutate(presence_absence=if_else(is.na(presence_absence),0L,1L))
+
+#Combinecoyote and FTF for 100 snow
+ftf_100_coy<-daymet_ftf_100|>
+  left_join(detect_coy,by=c("site","date"))
+
+ftf_100_coy<-ftf_100_coy|>
+  select(site,date,month,snow,days_since_ftf,presence_absence,max_temp_C,min_temp_C,precip_mm)
+
+ftf_100_coy<-ftf_100_coy|>
+  mutate(presence_absence=if_else(is.na(presence_absence),0L,1L))

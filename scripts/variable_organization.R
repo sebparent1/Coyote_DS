@@ -171,7 +171,18 @@ select(site,date,month,snow,days_since_ftf,presence_absence,max_temp_C,min_temp_
 ftf_gt50_coy<-ftf_gt50_coy|>
   mutate(presence_absence=if_else(is.na(presence_absence),0L,1L))
 
-#Combinecoyote and FTF for 100 snow
+ftf_gt50_coy <- ftf_gt50_coy|>
+  mutate(
+    next_dsf = lead(days_since_ftf),
+    rule1 = days_since_ftf == 0 & next_dsf == 0,
+    rule2 = days_since_ftf > 0 & next_dsf == 0,
+    ftf_length = case_when(
+      rule1 ~ 0,
+      rule2 ~ days_since_ftf,
+      TRUE ~ NA_real_
+    ))
+
+#Combine coyote and FTF for 100 snow
 ftf_100_coy<-daymet_ftf_100|>
   left_join(detect_coy,by=c("site","date"))
 

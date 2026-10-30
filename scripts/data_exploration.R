@@ -2,6 +2,7 @@ library(tidyverse)
 library(ggplot2)
 library(skimr)
 library(dplyr)
+library(patchwork)
 rm(list=ls())
 list.files()
 
@@ -111,56 +112,88 @@ ggplot(covs_buffer,
 #----Histograms----
 
 #Histogram of cfi, right-skewed
-ggplot(covs_buffer,
+cfi<-ggplot(covs_buffer,
        aes(x=cfi))+
   geom_histogram(bins=50)+
   theme_minimal()
 
 #Histogram of cfi with harvest, right-skewed
-ggplot(covs_buffer,
+cfi_harvest<-ggplot(covs_buffer,
        aes(x=cfi_with_harvest))+
   geom_histogram(bins=50)+
   theme_minimal()
 
+#Histogram of harvest 0-15yrs, right-skewed
+harvest_0_15<-ggplot(covs_buffer,
+       aes(x=harvest_0_15))+
+  geom_histogram(bins=50)+
+  theme_minimal()
+
+#Histogram of total seismic lines, right-skewed
+seismic<-ggplot(covs_buffer,
+       aes(x=seismic_total))+
+  geom_histogram(bins=50)+
+  theme_minimal()
+
+#Histogram of vegetation edges, right-skewed
+veg_edge<-ggplot(covs_buffer,
+       aes(x=veg_edges))+
+  geom_histogram(bins=50)+
+  theme_minimal()
+
 #Histogram of coniferous landcover, normal
-ggplot(covs_buffer,
+coni_lc<-ggplot(covs_buffer,
        aes(x=lc_coniferous))+
   geom_histogram(bins=50)+
   theme_minimal()
 
 #Histogram of shrub landcover, VERY right-skewed
-ggplot(covs_buffer,
+shrub_lc<-ggplot(covs_buffer,
        aes(x=lc_shrubs))+
   geom_histogram(bins=50)+
   theme_minimal()
 
 #Histogram of herb landcover, right-skewed
-ggplot(covs_buffer,
+herb_lc<-ggplot(covs_buffer,
        aes(x=lc_herbs))+
   geom_histogram(bins=50)+
   theme_minimal()
 
+#Plot all together
+(cfi|cfi_harvest|harvest_0_15|seismic)/(veg_edge|coni_lc|shrub_lc|herb_lc)
+
+
 
 #----Climate data exploration----
 
+#Bar chart of days since FTF
+days_since<-ggplot(ftf_gt50_coy,
+       aes(x=factor(ftf_length)))+
+  geom_bar()+
+  coord_cartesian(xlim=c(0,7),ylim=c(0,1000))+
+  theme_minimal()
+
+
 #Histogram of min temp, normal
-ggplot(ftf_gt50_coy,
+min_temp<-ggplot(ftf_gt50_coy,
        aes(x=min_temp_C))+
   geom_histogram(bins=30)+
 theme_minimal()
 
 #Histogram of max temp, normal
-ggplot(ftf_gt50_coy,
+max_temp<-ggplot(ftf_gt50_coy,
        aes(x=max_temp_C))+
   geom_histogram(bins=30)+
   theme_minimal()
 
 #Histogram of precip
-ggplot(ftf_gt50_coy,
+precip<-ggplot(ftf_gt50_coy,
        aes(x=precip_mm))+
   geom_histogram(bins=30)+
   theme_minimal()
 
+#Plot all together
+(days_since|precip)/(min_temp|max_temp)
 
 #----Coyote detection exploration----
 
@@ -194,6 +227,7 @@ ggplot(ftf_gt50_coy|>
          filter(presence_absence==1),
        aes(x=days_since_ftf))+
   geom_histogram(bins=50)+
+  coord_cartesian(xlim=c(0,10))
   theme_minimal()
 
 #Histogram of coyote detections after FTF for 100
@@ -223,14 +257,36 @@ ggplot(ftf_gt50_coy|>
   geom_histogram(bins=50)+
   theme_minimal()
 
+#Bar chart for presence/absence
+ggplot(ftf_gt50_coy, aes(x=factor(presence_absence)))+
+  geom_bar()+
+  theme_minimal()
+
+#Dotplot for coyote detetcions and precipitation
+ggplot(ftf_gt50_coy|>
+         filter(presence_absence==1),
+       aes(x=precip_mm, y=reorder(site)))+
+  geom_segment(aes(x=0,xend=precip_mm,y=reorder(site,precip_mm),
+                   yend=reorder(site,precip_mm)),
+               colour="grey70")+
+  geom_point(aes(x=precip_mm,y=reorder(site,precip_mm)),
+             size=2)+
+  labs(title=paste("Cleveland Dotplot","m buffer"),
+       x="Covariate value",
+       y=NULL)+
+  theme_minimal()+
+  theme(
+    axis.text.y=element_blank()
+  )
+
+
 #----Testing for collinearity----
 
-#Spearman's or Pearson (prob Spearman's)
-#Spearman's
+#Spearman's correlation
 covs_interest<-covs_buffer|>
-  select(cfi,cfi_with_harvest,lc_coniferous,lc_mixedwood,lc_shrubs,lc_herbs,lc_broadleaf,roads)
+  select(cfi,cfi_with_harvest,harvest_0_15,seismic_total,veg_edges,lc_coniferous,lc_mixedwood,lc_shrubs,lc_herbs,lc_broadleaf,roads)
 
 cor(covs_interest,method="spearman")
 
-
+#VIF (variance inflation factors)???
 

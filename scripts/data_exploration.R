@@ -16,7 +16,7 @@ cam_days<-read.csv("data/raw/OSM_operating_days_2021-2024.csv")
 
 #----Site covariate exploration----
 
-buffer<-2000
+buffer<-1000
 covs_buffer<-site_covs|>
   filter(buffer_dist==buffer)
 
@@ -159,8 +159,14 @@ herb_lc<-ggplot(covs_buffer,
   geom_histogram(bins=50)+
   theme_minimal()
 
+#Histogram of intact forest, 
+intact_forest<-ggplot(covs_buffer,
+                aes(x=intact_forest))+
+  geom_histogram(bins=50)+
+  theme_minimal()
+
 #Plot all together
-(cfi|cfi_harvest|harvest_0_15|seismic)/(veg_edge|coni_lc|shrub_lc|herb_lc)
+(cfi|cfi_harvest|intact_forest|seismic)/(veg_edge|coni_lc|shrub_lc|herb_lc)
 
 
 
@@ -192,8 +198,15 @@ precip<-ggplot(ftf_gt50_coy,
   geom_histogram(bins=30)+
   theme_minimal()
 
+#Histogram of precip
+thickness<-ggplot(ftf_gt50_coy,
+               aes(x=crust_thickness))+
+  geom_histogram(bins=20)+
+  theme_minimal()
+
 #Plot all together
-(days_since|precip)/(min_temp|max_temp)
+(days_since|precip|thickness)/(min_temp|max_temp)
+
 
 #----Coyote detection exploration----
 
@@ -262,7 +275,7 @@ ggplot(ftf_gt50_coy, aes(x=factor(presence_absence)))+
   geom_bar()+
   theme_minimal()
 
-#Dotplot for coyote detetcions and precipitation
+#Dotplot for coyote detections and precipitation
 ggplot(ftf_gt50_coy|>
          filter(presence_absence==1),
        aes(x=precip_mm, y=reorder(site)))+
@@ -284,9 +297,14 @@ ggplot(ftf_gt50_coy|>
 
 #Spearman's correlation
 covs_interest<-covs_buffer|>
-  select(cfi,cfi_with_harvest,harvest_0_15,seismic_total,veg_edges,lc_coniferous,lc_mixedwood,lc_shrubs,lc_herbs,lc_broadleaf,roads)
+  select(cfi,cfi_with_harvest,harvest_0_15,seismic_total,veg_edges,lc_coniferous,lc_mixedwood,lc_shrubs,lc_herbs,lc_broadleaf,roads,intact_forest)
 
 cor(covs_interest,method="spearman")
 
-#VIF (variance inflation factors)???
+climate_covs<-ftf_gt50_coy|>
+  select(crust_thickness,snow_water_equiv_kgM2,days_since_ftf)
+
+cor(climate_covs,method="spearman")
+
+ #VIF (variance inflation factors)???
 

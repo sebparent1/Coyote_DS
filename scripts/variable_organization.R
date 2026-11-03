@@ -17,11 +17,24 @@ timelapse_24<-read.csv('data/raw/OSM_timelapse_2024.csv')|>select(-leftantler, -
 
 detect<-read.csv("data/raw/OSM_independent_detections_2021-2024.csv")
 
+site_covs<-read.csv("data/raw/OSM_site_covariates_2021-2024.csv")
+
+
+#----Site sorting----
+
+#Create intact forest covariate
+site_covs<-site_covs|>
+  mutate(
+    intact_forest=lc_broadleaf+lc_coniferous+lc_mixedwood
+  )
+names(site_covs)
+
+
 #----DAYMET sorting----
 
 #Trim extra years
 daily_climate<-daily_climate|>
-  filter(year>=2021,year<=2025)
+  filter(year>=2021,year<=2024)
 
 #Add date column
 daily_climate<-daily_climate|>
@@ -30,9 +43,11 @@ daily_climate<-daily_climate|>
 #Normalize site names
 daily_climate<-daily_climate|>
   mutate(
-    site=sub("^(LU[0-9]_)([0-9])$","\\10\\2",site),
-    site=trimws(toupper(site))
+    site=gsub("^LU0*([0-9]+)_([0-9]+)$","LU\\1_\\2",site),
+    site=gsub("^LU([0-9]+)_([0-9])$","LU\\1_0\\2",site)
   )
+
+unique(daily_climate$site)
 
 
 #----Snow sorting----
@@ -47,8 +62,8 @@ snow<-timelapse_21_24|>
 #Normalize site names
 snow<-snow|>
   mutate(
-    site=sub("^(LU[0-9]_)([0-9])$","\\10\\2",site),
-    site=trimws(toupper(site))
+    site=gsub("^LU0*([0-9]+)_([0-9]+)$","LU\\1_\\2",site),
+    site=gsub("^LU([0-9]+)_([0-9])$","LU\\1_0\\2",site)
   )
 
 #Create date column and get one snow value per day
@@ -69,8 +84,10 @@ snow<-snow|>
 daymet_snow<-snow|>
   left_join(daily_climate,by=c("site","date"))
 
+daymet_snow$snow[is.na(daymet_snow$snow)]<-100
 
-#----Trim data to first/last snow (>50 or 100)
+
+#----Trim data to first/last snow (>50 or 100)----
 
 #Sort from first 100 to last 100
 daymet_snow_100<-daymet_snow|>
@@ -141,9 +158,22 @@ daymet_ftf_gt50<-daymet_snow_gt50|>
   )|>
   ungroup()
 
-#Write csvs
-daymet_ftf_gt50|>write.csv("data/processed/daymet_gt50.csv")
+#Add crust thickness column (# of FTF since last snow or full melt)
+daymet_ftf_gt50<-daymet_ftf_gt50|>
+  mutate(reset=(snow<50)|(snow==0)|(precip_mm!=0))|>
+  mutate(
+    snowpack_id=cumsum(reset)
+  )
 
+daymet_ftf_gt50<-daymet_ftf_gt50|>
+  group_by(snowpack_id)|>
+  mutate(
+    crust_thickness=cumsum(ftf_event)
+  )|>
+  ungroup()
+
+sum(is.na(daymet_ftf_gt50$lat))
+which(is.na(daymet_snow$lat))
 
 #----Coyote detection sorting----
 
@@ -166,7 +196,8 @@ ftf_gt50_coy<-daymet_ftf_gt50|>
   left_join(detect_coy,by=c("site","date"))
 
 ftf_gt50_coy<-ftf_gt50_coy|>
-select(site,date,month,snow,days_since_ftf,presence_absence,max_temp_C,min_temp_C,precip_mm)
+select(site,date,month,snow,snow_water_equiv_kgM2,precip_mm,days_since_ftf,
+       presence_absence,max_temp_C,min_temp_C,crust_thickness)
 
 ftf_gt50_coy<-ftf_gt50_coy|>
   mutate(presence_absence=if_else(is.na(presence_absence),0L,1L))
